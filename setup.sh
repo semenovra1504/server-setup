@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 
-set -euo pipefail
+set -uo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 if [[ "${EUID:-$(id -u)}" -ne 0 ]]; then
@@ -18,6 +18,11 @@ MODULES_FILE="/etc/modules"
 log() {
   echo
   echo "==> $1"
+}
+
+warn() {
+  echo
+  echo "[WARNING] $1"
 }
 
 append_if_missing() {
@@ -49,31 +54,16 @@ sysctl_set_or_append() {
   fi
 }
 
-apt_update_upgrade_with_retries() {
-  local tries=2
-  local delay=60
-
-  for ((i=1; i<=tries; i++)); do
-    echo "Попытка обновления: $i/$tries"
-
-    if apt-get update -o Acquire::Retries=3 && \
-       apt-get upgrade -y --fix-missing -o Acquire::Retries=3; then
-      echo "Обновление системы завершено"
-      return 0
-    fi
-
-    if [[ "$i" -lt "$tries" ]]; then
-      echo "apt временно недоступен, ждём ${delay} сек..."
-      sleep "$delay"
-    fi
-  done
-
-  echo "Ошибка: не удалось выполнить apt update/upgrade после $tries попыток"
-  exit 1
+run_apt_update_upgrade_nonfatal() {
+  if apt-get update && apt-get upgrade -y --fix-missing; then
+    echo "Обновление системы завершено"
+  else
+    warn "Не удалось выполнить apt update/upgrade. Продолжаем без обновления системы."
+  fi
 }
 
 log "1. Обновление системы"
-apt_update_upgrade_with_retries
+run_apt_update_upgrade_nonfatal
 
 log "2. Настройка /etc/security/limits.conf"
 append_if_missing "$LIMITS_FILE" "* soft nofile 200000"
@@ -88,7 +78,9 @@ log "4. Настройка /etc/systemd/user.conf"
 set_or_append_kv "$USER_CONF" "DefaultLimitNOFILE" "200000"
 
 log "5. Перезапуск systemd"
-systemctl daemon-reexec
+if ! systemctl daemon-reexec; then
+  warn "Не удалось выполнить systemctl daemon-reexec. Продолжаем."
+fi
 
 log "6. Настройка /etc/sysctl.conf"
 append_if_missing "$SYSCTL_FILE" ""
@@ -117,22 +109,32 @@ sysctl_set_or_append "net.ipv4.tcp_rmem" "4096 87380 67108864"
 sysctl_set_or_append "net.ipv4.tcp_wmem" "4096 65536 67108864"
 
 log "7. Загрузка nf_conntrack и применение sysctl"
-modprobe nf_conntrack || true
+if ! modprobe nf_conntrack; then
+  warn "Не удалось загрузить модуль nf_conntrack. Продолжаем."
+fi
+
 append_if_missing "$MODULES_FILE" "nf_conntrack"
-sysctl -p || true
+
+if ! sysctl -p; then
+  warn "Некоторые параметры sysctl не применились. Продолжаем."
+fi
 
 log "8. Установка 3x-ui"
 
 if [[ ! -r /dev/tty ]]; then
-  echo "Не найден интерактивный терминал (/dev/tty)."
-  echo "Из-за этого интерактивная установка 3x-ui сейчас невозможна."
-  echo "Запусти потом вручную:"
+  warn "Не найден интерактивный терминал (/dev/tty)."
+  echo "Запусти установку 3x-ui потом вручную:"
   echo "bash <(curl -fsSL https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)"
   exit 1
 fi
 
 TMP_3X_UI_INSTALL="/tmp/3x-ui-install.sh"
-curl -fsSL https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o "$TMP_3X_UI_INSTALL"
+
+if ! curl -fsSL https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o "$TMP_3X_UI_INSTALL"; then
+  echo "Ошибка: не удалось скачать install.sh для 3x-ui"
+  exit 1
+fi
+
 chmod +x "$TMP_3X_UI_INSTALL"
 
 echo
