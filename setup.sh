@@ -23,7 +23,6 @@ log() {
 append_if_missing() {
   local file="$1"
   local line="$2"
-
   grep -qxF "$line" "$file" 2>/dev/null || echo "$line" >> "$file"
 }
 
@@ -51,8 +50,8 @@ sysctl_set_or_append() {
 }
 
 apt_update_upgrade_with_retries() {
-  local tries=5
-  local delay=20
+  local tries=3
+  local delay=60
 
   for ((i=1; i<=tries; i++)); do
     echo "Попытка обновления: $i/$tries"
@@ -117,10 +116,10 @@ sysctl_set_or_append "net.core.wmem_max" "67108864"
 sysctl_set_or_append "net.ipv4.tcp_rmem" "4096 87380 67108864"
 sysctl_set_or_append "net.ipv4.tcp_wmem" "4096 65536 67108864"
 
-log "7. Применение sysctl и загрузка nf_conntrack"
-sysctl -p
-modprobe nf_conntrack
+log "7. Загрузка nf_conntrack и применение sysctl"
+modprobe nf_conntrack || true
 append_if_missing "$MODULES_FILE" "nf_conntrack"
+sysctl -p
 
 log "8. Установка 3x-ui"
 bash <(curl -fsSL https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
