@@ -50,8 +50,8 @@ sysctl_set_or_append() {
 }
 
 apt_update_upgrade_with_retries() {
-  local tries=5
-  local delay=20
+  local tries=2
+  local delay=60
 
   for ((i=1; i<=tries; i++)); do
     echo "Попытка обновления: $i/$tries"
