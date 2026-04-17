@@ -1,89 +1,81 @@
-#!/bin/bash
-GREEN='\033[0;32m'
-YELLOW='\033[1;33m'
-RED='\033[0;31m'
-NC='\033[0m'
-echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}Начало настройки сервера${NC}"
-echo -e "${GREEN}========================================${NC}"
-echo -e "${YELLOW}[1/8] Выполняется обновление сервера...${NC}"
-sudo apt update && sudo apt upgrade -y
-echo -e "${GREEN}Обновление завершено!${NC}"
-echo -e "${YELLOW}[2/8] Настройка /etc/security/limits.conf...${NC}"
-if ! grep -q "^* soft nofile 200000" /etc/security/limits.conf; then
-    sudo bash -c 'cat >> /etc/security/limits.conf << EOF
+#!/usr/bin/env bash
 
-* soft nofile 200000
-* hard nofile 200000
-root soft nofile 200000
-root hard nofile 200000
-EOF'
-    echo -e "${GREEN}limits.conf настроен!${NC}"
+set -euo pipefail
+
+if [[ "$EUID" -ne 0 ]]; then
+  echo "Запусти скрипт от root: sudo bash setup_server.sh"
+  exit 1
+fi
+
+echo "==> 1. Обновление системы"
+apt update && apt upgrade -y
+
+echo "==> 2. Настройка /etc/security/limits.conf"
+LIMITS_FILE="/etc/security/limits.conf"
+
+grep -qF "* soft nofile 200000" "$LIMITS_FILE" || echo "* soft nofile 200000" >> "$LIMITS_FILE"
+grep -qF "* hard nofile 200000" "$LIMITS_FILE" || echo "* hard nofile 200000" >> "$LIMITS_FILE"
+grep -qF "root soft nofile 200000" "$LIMITS_FILE" || echo "root soft nofile 200000" >> "$LIMITS_FILE"
+grep -qF "root hard nofile 200000" "$LIMITS_FILE" || echo "root hard nofile 200000" >> "$LIMITS_FILE"
+
+echo "==> 3. Настройка /etc/systemd/system.conf"
+SYSTEM_CONF="/etc/systemd/system.conf"
+
+if grep -Eq '^[#[:space:]]*DefaultLimitNOFILE=' "$SYSTEM_CONF"; then
+  sed -i 's|^[#[:space:]]*DefaultLimitNOFILE=.*|DefaultLimitNOFILE=200000|' "$SYSTEM_CONF"
 else
-    echo -e "${GREEN}limits.conf уже настроен!${NC}"
+  echo "DefaultLimitNOFILE=200000" >> "$SYSTEM_CONF"
 fi
-echo -e "${YELLOW}[3/8] Настройка /etc/systemd/system.conf...${NC}"
-sudo sed -i 's/^#DefaultLimitNOFILE=.*/DefaultLimitNOFILE=200000/' /etc/systemd/system.conf 2>/dev/null || true
-sudo sed -i 's/^DefaultLimitNOFILE=.*/DefaultLimitNOFILE=200000/' /etc/systemd/system.conf 2>/dev/null || true
-if ! grep -q "^DefaultLimitNOFILE=200000" /etc/systemd/system.conf; then
-    echo "DefaultLimitNOFILE=200000" | sudo tee -a /etc/systemd/system.conf > /dev/null
-fi
-echo -e "${GREEN}system.conf настроен!${NC}"
-echo -e "${YELLOW}[4/8] Настройка /etc/systemd/user.conf...${NC}"
-if ! grep -q "^DefaultLimitNOFILE=200000" /etc/systemd/user.conf; then
-    echo "DefaultLimitNOFILE=200000" | sudo tee -a /etc/systemd/user.conf > /dev/null
-fi
-echo -e "${GREEN}user.conf настроен!${NC}"
-echo -e "${YELLOW}[5/8] Перезагрузка systemd...${NC}"
-if sudo systemctl daemon-reexec 2>/dev/null; then
-    echo -e "${GREEN}Systemd перезагружен!${NC}"
+
+echo "==> 4. Настройка /etc/systemd/user.conf"
+USER_CONF="/etc/systemd/user.conf"
+
+if grep -Eq '^[#[:space:]]*DefaultLimitNOFILE=' "$USER_CONF"; then
+  sed -i 's|^[#[:space:]]*DefaultLimitNOFILE=.*|DefaultLimitNOFILE=200000|' "$USER_CONF"
 else
-    echo -e "${RED}Ошибка при перезагрузке systemd${NC}"
+  echo "DefaultLimitNOFILE=200000" >> "$USER_CONF"
 fi
-echo -e "${YELLOW}[6/8] Настройка /etc/sysctl.conf...${NC}"
-if ! grep -q "net.netfilter.nf_conntrack_max = 262144" /etc/sysctl.conf; then
-    sudo bash -c 'cat >> /etc/sysctl.conf << EOF
 
-# Increase connection tracking
-net.netfilter.nf_conntrack_max = 262144
+echo "==> 5. Перезапуск systemd daemon"
+systemctl daemon-reexec
 
-# Increase backlog
-net.core.somaxconn = 65535
-net.core.netdev_max_backlog = 65535
+echo "==> 6. Настройка /etc/sysctl.conf"
+SYSCTL_FILE="/etc/sysctl.conf"
 
-# Expand ephemeral ports
-net.ipv4.ip_local_port_range = 10000 65000
+add_sysctl_if_missing() {
+  local line="$1"
+  grep -qF "$line" "$SYSCTL_FILE" || echo "$line" >> "$SYSCTL_FILE"
+}
 
-# Optimize TCP
-net.ipv4.tcp_tw_reuse = 1
-net.ipv4.tcp_fin_timeout = 15
+add_sysctl_if_missing ""
+add_sysctl_if_missing "# Increase connection tracking"
+add_sysctl_if_missing "net.netfilter.nf_conntrack_max = 262144"
+add_sysctl_if_missing ""
+add_sysctl_if_missing "# Increase backlog"
+add_sysctl_if_missing "net.core.somaxconn = 65535"
+add_sysctl_if_missing "net.core.netdev_max_backlog = 65535"
+add_sysctl_if_missing ""
+add_sysctl_if_missing "# Expand ephemeral ports"
+add_sysctl_if_missing "net.ipv4.ip_local_port_range = 10000 65000"
+add_sysctl_if_missing ""
+add_sysctl_if_missing "# Optimize TCP"
+add_sysctl_if_missing "net.ipv4.tcp_tw_reuse = 1"
+add_sysctl_if_missing "net.ipv4.tcp_fin_timeout = 15"
+add_sysctl_if_missing ""
+add_sysctl_if_missing "# Buffers"
+add_sysctl_if_missing "net.core.rmem_max = 67108864"
+add_sysctl_if_missing "net.core.wmem_max = 67108864"
+add_sysctl_if_missing "net.ipv4.tcp_rmem = 4096 87380 67108864"
+add_sysctl_if_missing "net.ipv4.tcp_wmem = 4096 65536 67108864"
 
-# Buffers
-net.core.rmem_max = 67108864
-net.core.wmem_max = 67108864
-net.ipv4.tcp_rmem = 4096 87380 67108864
-net.ipv4.tcp_wmem = 4096 65536 67108864
-EOF'
-    echo -e "${GREEN}sysctl.conf настроен!${NC}"
-else
-    echo -e "${GREEN}sysctl.conf уже настроен!${NC}"
-fi
-echo -e "${YELLOW}[7/8] Применение настроек sysctl и настройка модулей...${NC}"
-sudo sysctl -p 2>/dev/null || true
-if ! lsmod | grep -q nf_conntrack; then
-    sudo modprobe nf_conntrack 2>/dev/null || echo -e "${RED}Модуль nf_conntrack не загружен${NC}"
-fi
-if ! grep -q "^nf_conntrack" /etc/modules 2>/dev/null; then
-    echo "nf_conntrack" | sudo tee -a /etc/modules > /dev/null 2>/dev/null || true
-fi
-echo -e "${GREEN}Настройки sysctl применены!${NC}"
-echo -e "${YELLOW}[8/8] Установка 3x-ui...${NC}"
-if command -v curl &> /dev/null; then
-    bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
-else
-    echo -e "${RED}curl не установлен. Установите: sudo apt install curl -y${NC}"
-    exit 1
-fi
-echo -e "${GREEN}========================================${NC}"
-echo -e "${GREEN}Настройка сервера полностью завершена!${NC}"
-echo -e "${GREEN}========================================${NC}"
+echo "==> 7. Применение sysctl и загрузка nf_conntrack"
+sysctl -p
+modprobe nf_conntrack
+
+grep -qFx "nf_conntrack" /etc/modules || echo "nf_conntrack" >> /etc/modules
+
+echo "==> 8. Установка 3x-ui"
+bash <(curl -Ls https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
+
+echo "==> Готово"
+echo "Рекомендуется перезагрузить сервер: sudo reboot"
