@@ -50,8 +50,8 @@ sysctl_set_or_append() {
 }
 
 apt_update_upgrade_with_retries() {
-  local tries=3
-  local delay=60
+  local tries=5
+  local delay=20
 
   for ((i=1; i<=tries; i++)); do
     echo "Попытка обновления: $i/$tries"
@@ -119,10 +119,31 @@ sysctl_set_or_append "net.ipv4.tcp_wmem" "4096 65536 67108864"
 log "7. Загрузка nf_conntrack и применение sysctl"
 modprobe nf_conntrack || true
 append_if_missing "$MODULES_FILE" "nf_conntrack"
-sysctl -p
+sysctl -p || true
 
 log "8. Установка 3x-ui"
-bash <(curl -fsSL https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)
+
+if [[ ! -r /dev/tty ]]; then
+  echo "Не найден интерактивный терминал (/dev/tty)."
+  echo "Из-за этого интерактивная установка 3x-ui сейчас невозможна."
+  echo "Запусти потом вручную:"
+  echo "bash <(curl -fsSL https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh)"
+  exit 1
+fi
+
+TMP_3X_UI_INSTALL="/tmp/3x-ui-install.sh"
+curl -fsSL https://raw.githubusercontent.com/mhsanaei/3x-ui/master/install.sh -o "$TMP_3X_UI_INSTALL"
+chmod +x "$TMP_3X_UI_INSTALL"
+
+echo
+echo "Базовая настройка завершена."
+echo "Сейчас начнется интерактивная установка 3x-ui."
+echo "Если установщик попросит домен, email или другие данные — вводи их в терминале."
+echo
+
+bash "$TMP_3X_UI_INSTALL" < /dev/tty > /dev/tty 2>&1
+
+rm -f "$TMP_3X_UI_INSTALL"
 
 log "Готово"
 echo "Рекомендуется перезагрузить сервер:"
